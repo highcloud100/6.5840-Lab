@@ -1,9 +1,13 @@
 package mr
 
 import "fmt"
+import "os"
 import "log"
 import "net/rpc"
 import "hash/fnv"
+import "strconv"
+import "io/ioutil"
+import "encoding/json"
 
 
 //
@@ -24,6 +28,46 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+func mapping(mapf func(string, string) []KeyValue,
+		reducef func(string, []string) string, reply * Reply){
+
+	// read data
+	file, err := os.Open(reply.Filename)
+	if err != nil{
+		log.Fatalf("cannot open %v", reply.Filename)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil{
+		log.Fatalf("cannot open %v", reply.Filename)
+	}
+	file.Close()
+	kva := mapf(reply.Filename, string(content))
+	
+	// partition
+	dkva := make([][] KeyValue, reply.Nreduce)
+
+	for _ , temp := range kva{
+		rTaskNum := ihash(temp.Key) % reply.Nreduce
+		dkva[rTaskNum] = append(dkva[rTaskNum], temp)
+	}
+
+	// write
+	for idx, temp := range dkva{
+		if len(temp) != 0{
+			oname := "mr-" + strconv.Itoa(reply.TaskNum) + "-" + strconv.Itoa(idx)
+			ofile, _ := os.Create(oname)
+		
+			enc := json.NewEncoder(ofile)
+			for _, kv := range temp {
+			  _ = enc.Encode(&kv)
+			  
+			}
+			ofile.Close()
+		}
+	}
+	
+	
+}
 
 //
 // main/mrworker.go calls this function.
@@ -35,6 +79,19 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
+	//CallExample()
+
+	args := Args{1}
+	reply := Reply{}
+
+	ok := call("Coordinator.JobRequest", &args, &reply)
+	if !ok { 
+		return;
+	}
+
+	if reply.JobType == 0 {
+		mapping(mapf, reducef , &reply)
+	} 
 
 }
 

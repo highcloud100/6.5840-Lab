@@ -5,14 +5,42 @@ import "net"
 import "os"
 import "net/rpc"
 import "net/http"
+import "fmt"
 
 
 type Coordinator struct {
 	// Your definitions here.
-
+	Files[] string
+	Checker map[string]bool
+	MapFlag bool
+	NReduce int
 }
 
 // Your code here -- RPC handlers for the worker to call.
+func (c* Coordinator) JobRequest(args*Args, reply*Reply) error {
+	reply.Nreduce = c.NReduce
+	if c.MapFlag==false{
+		for idx,i := range c.Files{
+			if c.Checker[i] == false {
+				reply.Filename = i
+				reply.TaskNum = idx
+				reply.JobType = 0
+				c.Checker[i] = true
+				
+
+				fmt.Println("res : %v",  i)
+
+				if idx == len(c.Checker)-1 {
+					c.MapFlag = true
+				}
+
+				return nil
+			}
+		}
+	}
+	
+	return nil
+}
 
 //
 // an example RPC handler.
@@ -61,7 +89,14 @@ func (c *Coordinator) Done() bool {
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
+	c.Files = files
+	c.Checker = make(map[string]bool)
+	c.MapFlag = false
+	c.NReduce = nReduce
 
+	for _, i := range files{
+		c.Checker[i] = false
+	}
 	// Your code here.
 
 
