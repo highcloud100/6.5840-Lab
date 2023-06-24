@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -23,11 +22,15 @@ type Coordinator struct {
 
 // Your code here -- RPC handlers for the worker to call.
 // concurrent
-func (c *Coordinator) Complete(args *Cargs, reply *Creply) error { // 작업이 완료되었는지 신호보냄
+// func (c *Coordinator) ReduceComplete(args *Rargs, reply *Rreply) error {
+
+// }
+
+func (c *Coordinator) Complete(args *Cargs, reply *Creply) error { // map 작업이 완료되었는지 신호보냄
 	c.Mut.Lock()
 	defer c.Mut.Unlock()
 
-	fmt.Printf("complete : %v\n", args.TaskName)
+	//fmt.Printf("complete : %v\n", args.TaskName)
 
 	c.Checker[args.TaskName] = 2
 
@@ -36,7 +39,7 @@ func (c *Coordinator) Complete(args *Cargs, reply *Creply) error { // 작업이 
 			return nil
 		}
 	}
-	fmt.Println("all completed")
+	//fmt.Println("all completed")
 	c.CompleteFlag = true
 	return nil
 }
@@ -56,7 +59,7 @@ func (c *Coordinator) JobRequest(args *Args, reply *Reply) error {
 				reply.JobType = 0
 				c.Checker[i] = 1
 
-				fmt.Println("res : %v", i)
+				//fmt.Printf("res : %v\n", i)
 
 				if idx == len(c.Checker)-1 {
 					c.MapFlag = true
@@ -73,7 +76,12 @@ func (c *Coordinator) JobRequest(args *Args, reply *Reply) error {
 		} else if c.RtaskCnt < c.NReduce {
 
 			reply.TaskNum = c.RtaskCnt
+			c.RtaskCnt++
 
+			reply.Nmap = len(c.Files)
+		} else {
+			reply.TaskNum = -2
+			c.Done()
 		}
 	}
 
@@ -105,7 +113,7 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := false
+	ret := true
 
 	// Your code here.
 

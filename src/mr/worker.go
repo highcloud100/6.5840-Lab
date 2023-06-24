@@ -8,9 +8,18 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 )
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -66,12 +75,57 @@ func mapping(mapf func(string, string) []KeyValue, reply *Reply) {
 	creply := Creply{}
 	ok := call("Coordinator.Complete", &cargs, &creply)
 	if !ok {
-		fmt.Printf("%v", ok)
+		//fmt.Printf("%v", ok)
 	}
 }
 
 func reducing(reducef func(string, []string) string, reply *Reply) {
+	var kva []KeyValue
 
+	//fmt.Printf("reduce %v\n", reply.TaskNum)
+
+	for i := 0; i < reply.Nmap; i++ {
+		name := "mr-" + strconv.Itoa(i) + "-" + strconv.Itoa(reply.TaskNum)
+		file, _ := os.Open(name)
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			kva = append(kva, kv)
+		}
+		file.Close()
+	}
+
+	sort.Sort(ByKey(kva))
+
+	oname := "mr-out-" + strconv.Itoa(reply.TaskNum)
+	ofile, _ := os.Create(oname)
+
+	//
+	// call Reduce on each distinct key in kva[],
+	// and print the result to mr-out-0.
+	//
+	i := 0
+	for i < len(kva) {
+		j := i + 1
+		for j < len(kva) && kva[j].Key == kva[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, kva[k].Value)
+		}
+		output := reducef(kva[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
+
+		i = j
+	}
+
+	ofile.Close()
 }
 
 // main/mrworker.go calls this function.
@@ -90,8 +144,8 @@ func Worker(mapf func(string, string) []KeyValue,
 
 		ok := call("Coordinator.JobRequest", &args, &reply)
 		if !ok {
-			fmt.Println("return")
-			fmt.Println(ok)
+			//fmt.Println("return")
+			//fmt.Println(ok)
 			return
 		}
 
@@ -100,9 +154,10 @@ func Worker(mapf func(string, string) []KeyValue,
 		} else {
 			if reply.TaskNum == -1 {
 				time.Sleep(1 * time.Second)
+			} else if reply.TaskNum == -2 {
+				return
 			} else {
 				reducing(reducef, &reply)
-				fmt.Println("reducing")
 			}
 		}
 	}
