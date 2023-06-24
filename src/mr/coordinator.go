@@ -6,36 +6,73 @@ import "os"
 import "net/rpc"
 import "net/http"
 import "fmt"
+import "sync"
 
 
 type Coordinator struct {
 	// Your definitions here.
 	Files[] string
-	Checker map[string]bool
+	Checker map[string]int // 0 1 2 (before, processing, completed)
 	MapFlag bool
 	NReduce int
+	Mut sync.Mutex
+	CompleteFlag bool
+	RtaskCnt int // allocate r num
 }
 
 // Your code here -- RPC handlers for the worker to call.
+// concurrent
+func (c* Coordinator) Complete(args* Cargs, reply* Creply) error{
+	c.Mut.Lock()
+	defer c.Mut.Unlock()
+
+	fmt.Println("complete : %v", args.TaskName)
+
+	c.Checker[args.TaskName] = 2
+
+	for _, val := range c.Checker{
+		if val != 2 {
+			return nil
+		}
+	}
+	fmt.Println("all completed")
+	c.CompleteFlag = true
+	return nil
+}
+
 func (c* Coordinator) JobRequest(args*Args, reply*Reply) error {
+	c.Mut.Lock()
+	defer c.Mut.Unlock()
+	
 	reply.Nreduce = c.NReduce
 	if c.MapFlag==false{
+		
 		for idx,i := range c.Files{
-			if c.Checker[i] == false {
+
+			if c.Checker[i] == 0 {
 				reply.Filename = i
 				reply.TaskNum = idx
 				reply.JobType = 0
-				c.Checker[i] = true
+				c.Checker[i] = 1
 				
-
 				fmt.Println("res : %v",  i)
 
 				if idx == len(c.Checker)-1 {
 					c.MapFlag = true
 				}
-
 				return nil
 			}
+		}
+	} else{
+		
+		if c.CompleteFlag == false{ // wait mapping
+			reply.TaskNum = -1
+			return nil
+
+		}else if c.RtaskCnt < c.NReduce{
+
+			reply.TaskNum = c.RtaskCnt
+
 		}
 	}
 	
@@ -90,12 +127,14 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	c.Files = files
-	c.Checker = make(map[string]bool)
+	c.Checker = make(map[string]int)
 	c.MapFlag = false
 	c.NReduce = nReduce
+	c.RtaskCnt = 0
+	c.CompleteFlag = false
 
 	for _, i := range files{
-		c.Checker[i] = false
+		c.Checker[i] = 0
 	}
 	// Your code here.
 

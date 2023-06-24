@@ -34,6 +34,15 @@ type Reply struct{
 	JobType int
 }
 
+type Cargs struct{
+	TaskName string
+}
+
+type Creply struct{
+	
+}
+
+
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.

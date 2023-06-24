@@ -8,6 +8,7 @@ import "hash/fnv"
 import "strconv"
 import "io/ioutil"
 import "encoding/json"
+import "time"
 
 
 //
@@ -28,8 +29,7 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-func mapping(mapf func(string, string) []KeyValue,
-		reducef func(string, []string) string, reply * Reply){
+func mapping(mapf func(string, string) []KeyValue, reply * Reply){
 
 	// read data
 	file, err := os.Open(reply.Filename)
@@ -43,7 +43,7 @@ func mapping(mapf func(string, string) []KeyValue,
 	file.Close()
 	kva := mapf(reply.Filename, string(content))
 	
-	// partition
+	// partitioning
 	dkva := make([][] KeyValue, reply.Nreduce)
 
 	for _ , temp := range kva{
@@ -65,8 +65,16 @@ func mapping(mapf func(string, string) []KeyValue,
 			ofile.Close()
 		}
 	}
-	
-	
+	cargs := Cargs{reply.Filename}
+	creply := Creply{}
+	ok := call("Coordinator.Complete", &cargs, &creply)
+	if !ok {
+		fmt.Printf("%v", ok)
+	}
+}
+
+func reducing(reducef func(string, []string) string, reply *Reply){
+
 }
 
 //
@@ -80,19 +88,31 @@ func Worker(mapf func(string, string) []KeyValue,
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 	//CallExample()
+	
+	for {
+		args := Args{1}
+		reply := Reply{}
 
-	args := Args{1}
-	reply := Reply{}
+		ok := call("Coordinator.JobRequest", &args, &reply)
+		if !ok { 
+			fmt.Println("return")
+			fmt.Println(ok)
+			return;
+		}
 
-	ok := call("Coordinator.JobRequest", &args, &reply)
-	if !ok { 
-		return;
+		fmt.Println
+
+		if reply.JobType == 0 {
+			mapping(mapf , &reply)
+		} else {
+			if reply.TaskNum == -1 {
+				time.Sleep(1 * time.Second)
+			} else {
+				reducing(reducef, &reply)
+			}
+		}
 	}
-
-	if reply.JobType == 0 {
-		mapping(mapf, reducef , &reply)
-	} 
-
+	
 }
 
 //
