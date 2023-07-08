@@ -39,6 +39,8 @@ type Reply struct {
 
 type Cargs struct {
 	TaskName string
+	TaskType string
+	TaskNum  int
 }
 
 type Creply struct {

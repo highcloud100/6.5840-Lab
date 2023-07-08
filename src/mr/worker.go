@@ -71,7 +71,7 @@ func mapping(mapf func(string, string) []KeyValue, reply *Reply) {
 			ofile.Close()
 		}
 	}
-	cargs := Cargs{reply.Filename}
+	cargs := Cargs{reply.Filename, "map", 0}
 	creply := Creply{}
 	ok := call("Coordinator.Complete", &cargs, &creply)
 	if !ok {
@@ -126,6 +126,12 @@ func reducing(reducef func(string, []string) string, reply *Reply) {
 	}
 
 	ofile.Close()
+	cargs := Cargs{"", "reduce", reply.TaskNum}
+	creply := Creply{}
+	ok := call("Coordinator.Complete", &cargs, &creply)
+	if !ok {
+		//fmt.Printf("%v", ok)
+	}
 }
 
 // main/mrworker.go calls this function.
@@ -157,6 +163,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			} else if reply.TaskNum == -2 {
 				return
 			} else {
+				//fmt.Println("reducing")
 				reducing(reducef, &reply)
 			}
 		}
