@@ -28,6 +28,17 @@ import (
 	"6.5840/labrpc"
 )
 
+type Log struct {
+	command string
+	term    int
+}
+
+const (
+	leader = iota
+	follower
+	candidate
+)
+
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
 // tester) on the same server, via the applyCh passed to Make(). set
@@ -60,7 +71,17 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	currentTerm int
+	votedFor    int
+	log         []Log
 
+	commitIndex int
+	lastApplied int
+
+	nextIndex  int
+	matchIndex int
+
+	role int
 }
 
 // return currentTerm and whether this server
@@ -70,6 +91,8 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	term = rf.currentTerm
+	isleader = (rf.role == leader)
 	return term, isleader
 }
 
@@ -124,12 +147,18 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	term         int
+	candidateId  int
+	lastLogIndex int
+	lastLogTerm  int
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
+	term        int
+	voteGranted int
 }
 
 // example RequestVote RPC handler.
@@ -215,6 +244,19 @@ func (rf *Raft) ticker() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
+		if rf.role == follower {
+			rf.role = candidate
+
+			lastLogIndex := len(rf.log)
+
+			req := RequestVoteArgs{rf.currentTerm, rf.me, lastLogIndex, rf.log[lastLogIndex].term}
+
+			for i := 0; i < len(rf.peers); i++ {
+				go func(idx int) {
+					rf.sendRequestVote(idx, &req, &reply)
+				}(i)
+			}
+		}
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
@@ -240,6 +282,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.role = follower
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
