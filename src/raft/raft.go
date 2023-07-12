@@ -41,6 +41,8 @@ const (
 	candidate
 )
 
+var who = [3]string{"leader", "follower", "candidate"}
+
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
 // tester) on the same server, via the applyCh passed to Make(). set
@@ -202,16 +204,24 @@ type RequestVoteReply struct {
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.rpcFlag = true
+
 	// Your code here (2A, 2B).
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
-	} else {
-		rf.rpcFlag = true
-		reply.Term = rf.currentTerm + 1
-		reply.VoteGranted = true
-		rf.votedFor = args.CandidateId
+		return
+	} else if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term // term update
+		reply.Term = rf.currentTerm
+		rf.role = follower
 	}
+
+	reply.VoteGranted = true
+	rf.votedFor = args.CandidateId
+
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -292,9 +302,11 @@ func (rf *Raft) heartBeat() {
 	for {
 		rf.mu.Lock()
 		if rf.role != leader {
+			rf.mu.Unlock()
 			return
 		}
 		rf.mu.Unlock()
+
 		time.Sleep(50 * time.Millisecond)
 
 		for i := 0; i < len(rf.peers); i++ {
@@ -315,6 +327,8 @@ func (rf *Raft) election() {
 	rf.role = candidate
 	lastLogIndex := len(rf.log)
 	rf.currentTerm += 1
+	rf.rpcFlag = false
+
 	req := RequestVoteArgs{rf.currentTerm, rf.me, lastLogIndex, 0}
 
 	cnt := 0
@@ -331,13 +345,13 @@ func (rf *Raft) election() {
 			reply := RequestVoteReply{}
 			rf.sendRequestVote(idx, &req, &reply)
 
-			DPrintf("id: %d,term(%d): reply msg from %d\n", rf.me, rf.currentTerm, idx)
+			DPrintf("id: %d,term(%d):msg replied  from %d\n", rf.me, rf.currentTerm, idx)
 
 			rf.mu.Lock()
 			cnt++
 			if reply.VoteGranted {
 				vote++
-				if rf.currentTerm <= reply.Term {
+				if rf.currentTerm < reply.Term {
 					termUpdateFlag = reply.Term
 				}
 			}
@@ -346,9 +360,13 @@ func (rf *Raft) election() {
 	}
 
 	for { // waiting vote
+
 		if rf.stopElect == true {
+			DPrintf("stop electing\n")
+			rf.role = follower
 			return
 		}
+
 		if termUpdateFlag == 1 ||
 			vote >= quorum || cnt >= len(rf.peers)-1 {
 			break
@@ -376,16 +394,24 @@ func (rf *Raft) ticker() {
 		rf.stopElect = false
 		// Your code here (2A)
 		// Check if a leader election should be started.
+
+		DPrintf(" pre----|| %d, %t, %s", rf.me, rf.rpcFlag, who[rf.role])
 		if !rf.rpcFlag && rf.role == follower {
 			go rf.election()
 		}
+
+		rf.mu.Lock()
 		rf.rpcFlag = false
+		rf.mu.Unlock()
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
 		ms := 50 + (rand.Int63() % 300)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
+
+		rf.mu.Lock()
 		rf.stopElect = true
+		rf.mu.Unlock()
 	}
 }
 
