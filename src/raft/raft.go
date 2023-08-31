@@ -31,7 +31,7 @@ import (
 )
 
 type Log struct {
-	Command string
+	Command interface{}
 	Term    int
 }
 
@@ -82,10 +82,11 @@ type Raft struct {
 	commitIndex int
 	lastApplied int
 
-	nextIndex  int
+	nextIndex  []int
 	matchIndex int
 
 	// extra
+	applyCh   chan ApplyMsg
 	stopElect bool
 	rpcFlag   bool
 	role      int
@@ -169,19 +170,48 @@ func (rf *Raft) AppendEntries(args *RequestAppendArgs, reply *RequestAppendReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if args.Term < rf.currentTerm {
+	//DPrintf("appendEntries | to %d term %d\n", rf.me, rf.currentTerm)
+
+	reply.Success = false
+
+	if args.Term < rf.currentTerm { // 요청 보낸 서버의 term 이 더 낮음
 		reply.Term = rf.currentTerm
-		reply.Success = false
 		return
-	} else if args.Term > rf.currentTerm {
+	} else if args.Term > rf.currentTerm { // term 업데이트
 		rf.currentTerm = args.Term
 		rf.role = follower
 	}
+
+	rf.rpcFlag = true // 임기의 리더에게 heart beat 받음
 	rf.leader = args.LeaderId
-	DPrintf("appendEntries | to %d term %d\n", rf.me, rf.currentTerm)
-	rf.rpcFlag = true
-	reply.Term = rf.currentTerm
-	reply.Success = true
+
+	// prev Log index 안가지고 있음
+	if len(rf.log) < args.PrevLogIndex || // index 넘어가나 검사
+		rf.log[args.PrevLogIndex].Term != args.PrevLogTerm { // term 같은지 검사
+		reply.Term = rf.currentTerm
+		return
+	}
+	//DPrintf("검사 : %t, %t\n", rf.log[args.PrevLogIndex].Term == args.PrevLogTerm, rf.log[args.PrevLogIndex].Command == args.Entries[0].Command)
+	if rf.log[args.PrevLogIndex].Term == args.PrevLogTerm &&
+		rf.log[args.PrevLogIndex].Command == args.Entries[0].Command {
+
+		reply.Term = rf.currentTerm
+		reply.Success = true
+
+		for i := 1; i < len(args.Entries); i++ {
+			if len(rf.log) <= args.PrevLogIndex+i {
+				rf.log = append(rf.log, args.Entries[i])
+			} else {
+				rf.log[args.PrevLogIndex+i] = args.Entries[i] // entry copy
+			}
+		}
+
+		for _, d := range rf.log {
+			DPrintf(" %d (%d) |", d.Command, d.Term)
+		}
+		return
+	}
+
 }
 
 // example RequestVote RPC arguments structure.
@@ -269,12 +299,88 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+
+	quorum := int(math.Ceil(float64(len(rf.peers)) / 2)) // 정족수
 	index := -1
 	term := -1
-	isLeader := true
+	isLeader := (rf.role == leader)
 
 	// Your code here (2B).
+	if !isLeader {
+		return 0, 0, false
+	}
+	DPrintf("start called")
+	cmd := Log{command, rf.currentTerm} // 리더에 추가
+	rf.log = append(rf.log, cmd)
 
+	cnt := 0
+	succeeded := 0
+
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
+		go func(idx int) {
+			for rf.nextIndex[idx] > 0 {
+				prevIndex := rf.nextIndex[idx] - 1
+				entry := make([]Log, 0)
+
+				for j := prevIndex; j < len(rf.log); j++ {
+					entry = append(entry, rf.log[j])
+				}
+
+				args := RequestAppendArgs{rf.currentTerm, rf.leader, prevIndex, rf.log[prevIndex].Term, entry, 0}
+				reply := RequestAppendReply{}
+
+				rf.peers[idx].Call("Raft.AppendEntries", &args, &reply)
+
+				if reply.Success {
+					rf.mu.Lock()
+					DPrintf("succeeded %d\n", idx)
+					succeeded++
+					rf.mu.Unlock()
+					break
+				}
+
+				rf.nextIndex[idx]--
+
+			}
+			rf.mu.Lock()
+			cnt++
+			rf.mu.Unlock()
+		}(i)
+	}
+
+	index = len(rf.log) - 1
+	term = rf.currentTerm
+	isLeader = true
+
+	go func() {
+		loop := 0
+
+		for loop < 2 {
+			rf.mu.Lock()
+			temp := succeeded
+			rf.mu.Unlock()
+			if temp >= quorum {
+
+				msg := ApplyMsg{true, command, index, false, nil, 0, 0}
+				println(msg.Command)
+				println(msg.CommandIndex)
+
+				rf.applyCh <- msg
+				DPrintf("applied msg: %s index : %d\n", cmd.Command, index)
+				break
+			}
+
+			time.Sleep(5 * time.Millisecond)
+			loop++
+		}
+
+	}()
+	for _, d := range rf.log {
+		DPrintf("start %d (%d)", d.Command, d.Term)
+	}
 	return index, term, isLeader
 }
 
@@ -298,7 +404,7 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) heartBeat() {
-	args := RequestAppendArgs{rf.currentTerm, rf.me, 0, 0, rf.log, 0}
+	args := RequestAppendArgs{rf.currentTerm, rf.me, 0, -2, rf.log, 0}
 	for {
 		rf.mu.Lock()
 		if rf.role != leader {
@@ -335,7 +441,7 @@ func (rf *Raft) election() {
 	vote := 1
 	termUpdateFlag := 0
 
-	DPrintf("id: %d,term(%d): start msg\n", rf.me, rf.currentTerm)
+	DPrintf("id: %d, term(%d): start msg\n", rf.me, rf.currentTerm)
 
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
@@ -345,7 +451,7 @@ func (rf *Raft) election() {
 			reply := RequestVoteReply{}
 			rf.sendRequestVote(idx, &req, &reply)
 
-			DPrintf("id: %d,term(%d):msg replied  from %d\n", rf.me, rf.currentTerm, idx)
+			DPrintf("id: %d, term(%d): msg replied from %d\n", rf.me, rf.currentTerm, idx)
 
 			rf.mu.Lock()
 			cnt++
@@ -379,9 +485,11 @@ func (rf *Raft) election() {
 		DPrintf("term updated\n")
 		rf.role = follower
 	} else if vote >= quorum && rf.rpcFlag == false {
-		DPrintf("id: %d,term(%d): leader\n", rf.me, rf.currentTerm)
-		DPrintf("---- %d / %d / %d\n", vote, cnt, len(rf.peers)/2)
+		DPrintf("id: %d, term(%d): leader\n", rf.me, rf.currentTerm)
+		//DPrintf("---- %d / %d / %d\n", vote, cnt, len(rf.peers)/2)
 		rf.role = leader
+		rf.leader = rf.me
+		rf.initialNextIndex() // next index 초기화
 		go rf.heartBeat()
 	} else {
 		DPrintf("vote failed\n")
@@ -395,7 +503,7 @@ func (rf *Raft) ticker() {
 		// Your code here (2A)
 		// Check if a leader election should be started.
 
-		DPrintf(" pre----|| %d, %t, %s", rf.me, rf.rpcFlag, who[rf.role])
+		//DPrintf(" pre----|| %d, %t, %s", rf.me, rf.rpcFlag, who[rf.role])
 		if !rf.rpcFlag && rf.role == follower {
 			go rf.election()
 		}
@@ -412,6 +520,12 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		rf.stopElect = true
 		rf.mu.Unlock()
+	}
+}
+
+func (rf *Raft) initialNextIndex() {
+	for i := 0; i < len(rf.peers); i++ {
+		rf.nextIndex[i] = len(rf.log)
 	}
 }
 
@@ -434,8 +548,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	rf.role = follower
 	rf.log = make([]Log, 1)
+	rf.log[0] = Log{nil, -1}
+	rf.nextIndex = make([]int, len(peers))
+	rf.initialNextIndex()
 
 	rf.rpcFlag = true
+
+	rf.applyCh = applyCh
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
